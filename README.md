@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Kampala Community Health Clinic Management System
 
 This project contains a full-stack healthcare patient management system with:
@@ -46,3 +47,7 @@ python manage.py runserver
 ## Notes
 
 This MVP provides the working foundation for a patient management system and AI first-contact workflow.
+=======
+# KHC
+Hospital management system: The aim of the  proposed system is to improve how patient information is handled and how appointments are  scheduled within the clinics.  The challenges the clinics face with it  manual system: Most patient records are kept on paper files, and appointments  are managed through phone calls or physical visits.
+>>>>>>> b6cf8c337160e0b1c56151705f451e38e6d6bc4d
