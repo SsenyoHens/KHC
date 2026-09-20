@@ -1,0 +1,126 @@
+from django.contrib.auth.models import User
+from django.test import TestCase
+from rest_framework.test import APIClient
+
+from .models import PatientProfile, UserRole
+
+
+class AITriageEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_emergency_symptoms_are_routed_for_immediate_assistance(self):
+        response = self.client.post('/api/ai-triage/', {'message': 'I have chest pain and trouble breathing'}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['urgency'], 'emergency')
+        self.assertIn('doctor', response.json()['route'].lower())
+
+    def test_standard_symptoms_are_booked_for_appointment(self):
+        response = self.client.post('/api/ai-triage/', {'message': 'I need a consultation for fever and headache'}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['urgency'], 'medium')
+        self.assertIn('appointment', response.json()['route'].lower())
+
+    def test_patient_can_register_and_create_appointment(self):
+        register_response = self.client.post('/api/register/', {
+            'username': 'patient1',
+            'email': 'patient1@example.com',
+            'password': 'securepass123',
+            'first_name': 'Alice',
+            'last_name': 'Smith',
+        }, format='json')
+
+        self.assertEqual(register_response.status_code, 201)
+        self.assertIn('access', register_response.json())
+
+        user = User.objects.get(username='patient1')
+        profile = PatientProfile.objects.get(user=user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {register_response.json()["access"]}')
+
+        appointment_response = self.client.post('/api/appointments/', {
+            'doctor_name': 'Dr. Grace Brown',
+            'department': 'General Medicine',
+            'appointment_date': '2026-09-01',
+            'appointment_time': '10:00:00',
+            'notes': 'Follow-up consultation',
+        }, format='json')
+
+        self.assertEqual(appointment_response.status_code, 201)
+        self.assertEqual(appointment_response.json()['patient'], profile.id)
+        self.assertEqual(appointment_response.json()['doctor_name'], 'Dr. Grace Brown')
+
+    def test_patient_can_create_chat_session_and_doctor_reply(self):
+        register_response = self.client.post('/api/register/', {
+            'username': 'patient2',
+            'email': 'patient2@example.com',
+            'password': 'securepass123',
+            'first_name': 'Bob',
+            'last_name': 'Jones',
+        }, format='json')
+
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {register_response.json()["access"]}')
+
+        session_response = self.client.post('/api/chat-sessions/', {'topic': 'Follow-up consultation'}, format='json')
+        self.assertEqual(session_response.status_code, 201)
+
+        session_id = session_response.json()['id']
+        patient_message = self.client.post('/api/chat-messages/', {
+            'session': session_id,
+            'sender': 'patient',
+            'message': 'I feel lightheaded after my last visit.',
+        }, format='json')
+
+        self.assertEqual(patient_message.status_code, 201)
+        self.assertEqual(patient_message.json()['sender'], 'patient')
+
+        doctor_reply = self.client.post('/api/chat-messages/', {
+            'session': session_id,
+            'sender': 'doctor',
+            'message': 'Please come in for a follow-up review this afternoon.',
+        }, format='json')
+
+        self.assertEqual(doctor_reply.status_code, 403)
+
+    def test_ai_summary_is_generated_before_escalation(self):
+        response = self.client.post('/api/ai-summary/', {
+            'symptoms': 'Fever, headache, and nausea for two days',
+            'context': 'Patient reports worsening symptoms and wants a review before booking',
+            'route': 'Doctor appointment booking',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('summary', response.json())
+        self.assertIn('doctor', response.json()['route'].lower())
+        self.assertIn('fever', response.json()['summary'].lower())
+
+    def test_public_registration_cannot_select_a_staff_role(self):
+        response = self.client.post('/api/register/', {
+            'username': 'notadoctor',
+            'email': 'role@example.com',
+            'password': 'securepass123',
+            'role': 'doctor',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_receptionist_can_issue_invoice_and_patient_can_view_own_invoice(self):
+        patient = User.objects.create_user('billingpatient', password='securepass123')
+        patient_profile = PatientProfile.objects.create(user=patient, full_name='Billing Patient')
+        receptionist = User.objects.create_user('reception1', password='securepass123')
+        UserRole.objects.create(user=receptionist, role='receptionist')
+
+        self.client.force_authenticate(user=receptionist)
+        response = self.client.post('/api/billing/invoices/', {
+            'patient': patient_profile.id,
+            'description': 'General consultation',
+            'amount': '45000.00',
+            'status': 'unpaid',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.client.force_authenticate(user=patient)
+        patient_response = self.client.get('/api/billing/invoices/')
+        self.assertEqual(patient_response.status_code, 200)
+        self.assertEqual(len(patient_response.json()), 1)
